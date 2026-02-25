@@ -36,9 +36,9 @@ MIDDLEWARE = [
 ]
 
 # Remove debug toolbar in production
-if DEBUG:
-    MIDDLEWARE.insert(0, 'debug_toolbar.middleware.DebugToolbarMiddleware')
-    INSTALLED_APPS.append('debug_toolbar')
+# if DEBUG:
+#     MIDDLEWARE.insert(0, 'debug_toolbar.middleware.DebugToolbarMiddleware')
+#     INSTALLED_APPS.append('debug_toolbar')
 
 # Static files – use manifest storage for cache busting
 STORAGES = {
