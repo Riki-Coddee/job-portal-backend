@@ -67,7 +67,7 @@ INSTALLED_APPS = [
     # Celery apps
     'django_celery_beat',
     'django_celery_results',
-    'debug_toolbar',
+    # 'debug_toolbar',
     'contact',
     'user_settings',
 ]
@@ -75,7 +75,7 @@ INSTALLED_APPS = [
 
 
 MIDDLEWARE = [
-    'debug_toolbar.middleware.DebugToolbarMiddleware',
+    # 'debug_toolbar.middleware.DebugToolbarMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
