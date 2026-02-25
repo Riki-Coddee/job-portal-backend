@@ -1,16 +1,28 @@
 import os
 import dj_database_url
 from .settings import *
-from .settings import BASE_DIR
 
-ALLOWED_HOSTS=[os.environ.get('RENDER_EXTERNAL_HOSTNAME')]
-CSRF_TRUSTED_ORIGINS = ['https://'+os.environ.get('RENDER_EXTERNAL_HOSTNAME')]
-
+# Override only what's necessary for production
 DEBUG = False
 SECRET_KEY = os.environ.get('SECRET_KEY')
+if not SECRET_KEY:
+    raise ValueError("SECRET_KEY environment variable must be set")
 
+# Hosts
+RENDER_EXTERNAL_HOSTNAME = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
+if RENDER_EXTERNAL_HOSTNAME:
+    ALLOWED_HOSTS = [RENDER_EXTERNAL_HOSTNAME, 'localhost', '127.0.0.1']
+    CSRF_TRUSTED_ORIGINS = [f'https://{RENDER_EXTERNAL_HOSTNAME}']
+else:
+    ALLOWED_HOSTS = ['*']
+    CSRF_TRUSTED_ORIGINS = []
+
+# CORS – restrict to your frontend domain in production
+CORS_ALLOWED_ORIGINS = os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',')
+CORS_ALLOW_ALL_ORIGINS = False
+
+# Middleware – keep only one of each, and ensure WhiteNoise is early
 MIDDLEWARE = [
-    'debug_toolbar.middleware.DebugToolbarMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
@@ -20,85 +32,79 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'corsheaders.middleware.CorsMiddleware', 
-    'django.middleware.security.SecurityMiddleware',
     'accounts.middleware.UpdateLastActivityMiddleware',
 ]
 
-# CORS_ALLOWED_ORIGINS = [
-#     'http://localhost:5173'
-# ]
+# Remove debug toolbar in production
+if DEBUG:
+    MIDDLEWARE.insert(0, 'debug_toolbar.middleware.DebugToolbarMiddleware')
+    INSTALLED_APPS.append('debug_toolbar')
 
-STORAGES= {
-    "default" : {
-        "BACKEND" : "django.core.files.storage.FileSystemStorage",
+# Static files – use manifest storage for cache busting
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
     },
-    "staticfiles" : {
-        "BACKEND":"whitenoise.storage.CompressedStaticFilesStorage"
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
     },
 }
 
+# Database
 DATABASES = {
-    "default":dj_database_url.config(
-        default = os.environ.get("DATABASE_URL"),
-        conn_max_age = 600
+    "default": dj_database_url.config(
+        default=os.environ.get("DATABASE_URL"),
+        conn_max_age=600,
+        ssl_require=True
     )
 }
 
-
-# ========== EMAIL CONFIGURATION FOR RENDER FREE TIER ==========
-# Using SendGrid Web API (HTTPS/443) instead of SMTP (587) 
-# because Render free tier blocks SMTP ports
-
+# Email – override the SMTP settings with SendGrid Web API
 import sendgrid
 from sendgrid.helpers.mail import Mail
 
-# SendGrid API configuration (works on free tier - port 443)
-SENDGRID_API_KEY = os.environ.get('SENDGRID_API_KEY')  # Required
+SENDGRID_API_KEY = os.environ.get('SENDGRID_API_KEY')
+if SENDGRID_API_KEY:
+    # We'll use a custom email function, not Django's SMTP backend
+    def send_mail(subject, message, from_email, recipient_list,
+                  fail_silently=False, auth_user=None, auth_password=None,
+                  connection=None, html_message=None):
+        """Send email via SendGrid Web API (works on Render free tier)."""
+        try:
+            sg = sendgrid.SendGridAPIClient(api_key=SENDGRID_API_KEY)
+            mail = Mail(
+                from_email=from_email,
+                to_emails=recipient_list[0] if recipient_list else None,
+                subject=subject,
+                plain_text_content=message
+            )
+            if html_message:
+                mail.add_content(html_message, "text/html")
+            response = sg.send(mail)
+            return response.status_code == 202
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"SendGrid email failed: {e}")
+            return False
 
-# Email sender and recipient settings
+    # Optionally replace Django's send_mail globally (use with caution)
+    import django.core.mail
+    django.core.mail.send_mail = send_mail
+
+# Email sender settings
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL')
 SERVER_EMAIL = os.environ.get('SERVER_EMAIL')
 ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL')
-
-# Site URL for email templates
 SITE_URL = os.environ.get('SITE_URL')
 
-# Custom email sending function using SendGrid Web API
-def send_email_via_sendgrid(subject, message, from_email, recipient_list, html_message=None):
-    """
-    Send email using SendGrid Web API (works on Render free tier)
-    Returns True if successful, False otherwise
-    """
-    try:
-        sg = sendgrid.SendGridAPIClient(api_key=SENDGRID_API_KEY)
-        
-        mail = Mail(
-            from_email=from_email,
-            to_emails=recipient_list[0] if recipient_list else None,
-            subject=subject,
-            plain_text_content=message
-        )
-        
-        if html_message:
-            mail.add_content(html_message, "text/html")
-        
-        response = sg.send(mail)
-        return response.status_code == 202  # 202 means accepted
-    except Exception as e:
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.error(f"SendGrid email failed: {e}")
-        return False
-
-# Override Django's send_mail to use SendGrid API
-from django.core.mail import send_mail as django_send_mail
-from django.core.mail import EmailMessage
-
-def send_mail(subject, message, from_email, recipient_list, 
-              fail_silently=False, auth_user=None, auth_password=None, 
-              connection=None, html_message=None):
-    """
-    Replacement for django.core.mail.send_mail that uses SendGrid API
-    """
-    return send_email_via_sendgrid(subject, message, from_email, recipient_list, html_message)
+# Security enhancements for production
+SECURE_SSL_REDIRECT = True
+SESSION_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = True
+SECURE_BROWSER_XSS_FILTER = True
+SECURE_CONTENT_TYPE_NOSNIFF = True
+X_FRAME_OPTIONS = 'DENY'
+SECURE_HSTS_SECONDS = 31536000
+SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+SECURE_HSTS_PRELOAD = True
