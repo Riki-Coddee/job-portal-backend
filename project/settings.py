@@ -69,6 +69,7 @@ INSTALLED_APPS = [
     'django_celery_results',
     'debug_toolbar',
     'contact',
+    'user_settings',
 ]
 
 
