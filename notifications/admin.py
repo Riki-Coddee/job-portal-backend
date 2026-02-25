@@ -3,9 +3,10 @@ from django.utils.html import format_html
 from django.urls import reverse
 from .models import Notification
 
+
 @admin.register(Notification)
 class NotificationAdmin(admin.ModelAdmin):
-    """Professional admin interface for Notifications"""
+    """Professional admin interface for Notifications – optimized & read‑only"""
     list_display = (
         'notification_id',
         'user_info',
@@ -16,14 +17,14 @@ class NotificationAdmin(admin.ModelAdmin):
         'created_ago',
         'related_object'
     )
-    
+
     list_filter = (
         'is_read',
         'notification_type',
         'priority',
         'created_at'
     )
-    
+
     search_fields = (
         'user__email',
         'user__first_name',
@@ -31,7 +32,7 @@ class NotificationAdmin(admin.ModelAdmin):
         'title',
         'message'
     )
-    
+
     readonly_fields = (
         'notification_details',
         'user_details',
@@ -39,7 +40,7 @@ class NotificationAdmin(admin.ModelAdmin):
         'created_at_display',
         'read_at_display'
     )
-    
+
     fieldsets = (
         ('Notification Details', {
             'fields': ('notification_details',),
@@ -66,31 +67,40 @@ class NotificationAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
-    
+
     list_per_page = 25
     date_hierarchy = 'created_at'
     actions = ['mark_as_read', 'mark_as_unread', 'export_notifications_csv']
-    
+    show_full_result_count = False  # ⬅️ Eliminates duplicate COUNT(*)
+
+    # Disable all write operations (read‑only)
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
     def notification_id(self, obj):
         """Display notification ID"""
-        return format_html(
-            '<strong>#{}</strong>',
-            obj.id
-        )
+        return format_html('<strong>#{}</strong>', obj.id)
     notification_id.short_description = 'ID'
-    
+
     def user_info(self, obj):
-        """Display user information"""
+        """Display user information – uses prefetched reverse relations"""
         url = reverse('admin:accounts_customuser_change', args=[obj.user.id])
-        
-        # Determine user role for appropriate link
-        if hasattr(obj.user, 'seeker_profile'):
+
+        # Determine user role for appropriate profile link
+        # Use hasattr on already-prefetched objects – no extra query
+        if hasattr(obj.user, 'seeker_profile') and obj.user.seeker_profile:
             profile_url = reverse('admin:accounts_jobseeker_change', args=[obj.user.seeker_profile.id])
-        elif hasattr(obj.user, 'recruiter'):
+        elif hasattr(obj.user, 'recruiter') and obj.user.recruiter:
             profile_url = reverse('admin:accounts_recruiter_change', args=[obj.user.recruiter.id])
         else:
             profile_url = url
-        
+
         return format_html(
             '<div style="min-width: 180px;">'
             '<a href="{}"><strong>{}</strong></a><br>'
@@ -103,7 +113,7 @@ class NotificationAdmin(admin.ModelAdmin):
             profile_url
         )
     user_info.short_description = 'User'
-    
+
     def notification_type_badge(self, obj):
         """Display notification type with badge"""
         type_config = {
@@ -116,20 +126,18 @@ class NotificationAdmin(admin.ModelAdmin):
             'offer_extended': ('success', '🏆'),
             'system_alert': ('dark', '⚠️'),
         }
-        
         color, icon = type_config.get(obj.notification_type, ('secondary', '🔔'))
-        
         return format_html(
             '<span class="badge bg-{}" style="font-size: 11px;">{} {}</span>',
             color, icon, obj.get_notification_type_display()
         )
     notification_type_badge.short_description = 'Type'
-    
+
     def title_preview(self, obj):
         """Display title preview"""
         return obj.title[:50] + "..." if len(obj.title) > 50 else obj.title
     title_preview.short_description = 'Title'
-    
+
     def priority_badge(self, obj):
         """Display priority badge"""
         priority_colors = {
@@ -138,13 +146,12 @@ class NotificationAdmin(admin.ModelAdmin):
             'high': 'danger',
         }
         color = priority_colors.get(obj.priority, 'secondary')
-        
         return format_html(
             '<span class="badge bg-{}">{}</span>',
             color, obj.get_priority_display().upper()
         )
     priority_badge.short_description = 'Priority'
-    
+
     def read_status(self, obj):
         """Display read status"""
         if obj.is_read:
@@ -153,42 +160,30 @@ class NotificationAdmin(admin.ModelAdmin):
                 '<small class="text-muted">{}</small>',
                 obj.read_at.strftime('%b %d') if obj.read_at else ''
             )
-        return format_html(
-            '<span class="badge bg-danger">Unread</span>'
-        )
+        return format_html('<span class="badge bg-danger">Unread</span>')
     read_status.short_description = 'Status'
-    
+
     def created_ago(self, obj):
-        """Display time ago"""
+        """Display time ago (property on model)"""
         return obj.time_ago
     created_ago.short_description = 'Created'
-    
+
     def related_object(self, obj):
-        """Display related object"""
+        """Display related object – uses select_related / prefetched data"""
         if obj.application:
             url = reverse('admin:applications_application_change', args=[obj.application.id])
-            return format_html(
-                '<a href="{}">Application #{}</a>',
-                url, obj.application.id
-            )
+            return format_html('<a href="{}">Application #{}</a>', url, obj.application.id)
         elif obj.interview:
             url = reverse('admin:applications_interview_change', args=[obj.interview.id])
-            return format_html(
-                '<a href="{}">Interview</a>',
-                url
-            )
+            return format_html('<a href="{}">Interview</a>', url)
         elif obj.job:
             url = reverse('admin:jobs_job_change', args=[obj.job.id])
-            return format_html(
-                '<a href="{}">Job</a>',
-                url
-            )
+            return format_html('<a href="{}">Job</a>', url)
         return format_html('<span class="text-muted">-</span>')
     related_object.short_description = 'Related To'
-    
-    # Detail view methods
+
+    # Detail view methods (unchanged but safe)
     def notification_details(self, obj):
-        """Display notification details"""
         return format_html(
             '<div class="info-box">'
             '<h3>Notification Details</h3>'
@@ -213,9 +208,8 @@ class NotificationAdmin(admin.ModelAdmin):
             obj.read_at.strftime('%B %d, %Y at %I:%M %p') if obj.read_at else 'Not read'
         )
     notification_details.short_description = ''
-    
+
     def user_details(self, obj):
-        """Display user details"""
         return format_html(
             '<div class="info-box">'
             '<h4>User Information</h4>'
@@ -229,25 +223,20 @@ class NotificationAdmin(admin.ModelAdmin):
             obj.user.get_role_display()
         )
     user_details.short_description = ''
-    
+
     def related_object_info(self, obj):
-        """Display related object information"""
         info_parts = []
-        
         if obj.application:
             url = reverse('admin:applications_application_change', args=[obj.application.id])
             info_parts.append(f'<p><strong>Application:</strong> <a href="{url}">#{obj.application.id}</a></p>')
             info_parts.append(f'<p><strong>Candidate:</strong> {obj.application.seeker.user.get_full_name() or obj.application.seeker.user.email}</p>')
             info_parts.append(f'<p><strong>Job:</strong> {obj.application.job.title}</p>')
-        
         if obj.interview:
             url = reverse('admin:applications_interview_change', args=[obj.interview.id])
             info_parts.append(f'<p><strong>Interview:</strong> <a href="{url}">Scheduled for {obj.interview.scheduled_date.strftime("%B %d, %Y")}</a></p>')
-        
         if obj.job:
             url = reverse('admin:jobs_job_change', args=[obj.job.id])
             info_parts.append(f'<p><strong>Job:</strong> <a href="{url}">{obj.job.title}</a></p>')
-        
         if info_parts:
             return format_html(
                 '<div class="info-box">'
@@ -258,50 +247,40 @@ class NotificationAdmin(admin.ModelAdmin):
             )
         return format_html('<p class="text-muted">No related objects</p>')
     related_object_info.short_description = ''
-    
+
     def created_at_display(self, obj):
-        """Display creation date"""
         return obj.created_at.strftime('%B %d, %Y at %I:%M %p')
     created_at_display.short_description = 'Created'
-    
+
     def read_at_display(self, obj):
-        """Display read date"""
         if obj.read_at:
             return obj.read_at.strftime('%B %d, %Y at %I:%M %p')
         return 'Not read yet'
     read_at_display.short_description = 'Read At'
-    
+
     @admin.action(description="Mark as read")
     def mark_as_read(self, request, queryset):
-        """Mark selected notifications as read"""
         from django.utils import timezone
-        
         for notification in queryset:
             notification.mark_as_read()
-        
         self.message_user(request, f'{queryset.count()} notification(s) marked as read.')
-    
+
     @admin.action(description="Mark as unread")
     def mark_as_unread(self, request, queryset):
-        """Mark selected notifications as unread"""
         updated = queryset.update(is_read=False, read_at=None)
         self.message_user(request, f'{updated} notification(s) marked as unread.')
-    
+
     @admin.action(description="Export to CSV")
     def export_notifications_csv(self, request, queryset):
-        """Export notifications to CSV"""
         import csv
         from django.http import HttpResponse
-        
         response = HttpResponse(content_type='text/csv')
         response['Content-Disposition'] = 'attachment; filename="notifications_export.csv"'
-        
         writer = csv.writer(response)
         writer.writerow([
             'ID', 'User Email', 'Type', 'Title', 'Priority', 'Read Status',
             'Created Date', 'Related Object'
         ])
-        
         for notification in queryset:
             related_obj = ''
             if notification.application:
@@ -310,7 +289,6 @@ class NotificationAdmin(admin.ModelAdmin):
                 related_obj = f'Interview #{notification.interview.id}'
             elif notification.job:
                 related_obj = f'Job: {notification.job.title}'
-            
             writer.writerow([
                 notification.id,
                 notification.user.email,
@@ -321,11 +299,10 @@ class NotificationAdmin(admin.ModelAdmin):
                 notification.created_at.strftime('%Y-%m-%d %H:%M'),
                 related_obj
             ])
-        
         return response
-    
+
     def get_queryset(self, request):
-        """Optimize queryset"""
+        """Optimized queryset with select_related and prefetch_related"""
         qs = super().get_queryset(request)
         return qs.select_related(
             'user',
@@ -333,4 +310,7 @@ class NotificationAdmin(admin.ModelAdmin):
             'application__job',
             'interview',
             'job'
+        ).prefetch_related(
+            'user__seeker_profile',   # ⬅️ Prefetch reverse one-to-one for job seeker profile
+            'user__recruiter'          # ⬅️ Prefetch reverse one-to-one for recruiter profile
         )

@@ -44,3 +44,61 @@ DATABASES = {
         conn_max_age = 600
     )
 }
+
+
+# ========== EMAIL CONFIGURATION FOR RENDER FREE TIER ==========
+# Using SendGrid Web API (HTTPS/443) instead of SMTP (587) 
+# because Render free tier blocks SMTP ports
+
+import sendgrid
+from sendgrid.helpers.mail import Mail
+
+# SendGrid API configuration (works on free tier - port 443)
+SENDGRID_API_KEY = os.environ.get('SENDGRID_API_KEY')  # Required
+
+# Email sender and recipient settings
+DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL')
+SERVER_EMAIL = os.environ.get('SERVER_EMAIL')
+ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL')
+
+# Site URL for email templates
+SITE_URL = os.environ.get('SITE_URL')
+
+# Custom email sending function using SendGrid Web API
+def send_email_via_sendgrid(subject, message, from_email, recipient_list, html_message=None):
+    """
+    Send email using SendGrid Web API (works on Render free tier)
+    Returns True if successful, False otherwise
+    """
+    try:
+        sg = sendgrid.SendGridAPIClient(api_key=SENDGRID_API_KEY)
+        
+        mail = Mail(
+            from_email=from_email,
+            to_emails=recipient_list[0] if recipient_list else None,
+            subject=subject,
+            plain_text_content=message
+        )
+        
+        if html_message:
+            mail.add_content(html_message, "text/html")
+        
+        response = sg.send(mail)
+        return response.status_code == 202  # 202 means accepted
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"SendGrid email failed: {e}")
+        return False
+
+# Override Django's send_mail to use SendGrid API
+from django.core.mail import send_mail as django_send_mail
+from django.core.mail import EmailMessage
+
+def send_mail(subject, message, from_email, recipient_list, 
+              fail_silently=False, auth_user=None, auth_password=None, 
+              connection=None, html_message=None):
+    """
+    Replacement for django.core.mail.send_mail that uses SendGrid API
+    """
+    return send_email_via_sendgrid(subject, message, from_email, recipient_list, html_message)

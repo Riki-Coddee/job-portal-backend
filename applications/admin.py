@@ -1,58 +1,59 @@
 from django.contrib import admin
 from django.utils.html import format_html
 from django.urls import reverse
-from django.db.models import Count, Avg, Q
+from django.db.models import Count, Avg, Q, Exists, OuterRef
 from django.utils import timezone
 from .models import Application, ApplicationNote, Interview, CandidateTag, CandidateCommunication
 
 
+# ========== INLINE CLASSES (Read‑only) ==========
 class ApplicationNoteInline(admin.TabularInline):
-    """Inline for Application Notes"""
     model = ApplicationNote
     extra = 0
-    max_num = 5
+    max_num = 0                     # prevent adding new notes
     fields = ('recruiter', 'note_preview', 'created_at', 'is_private')
     readonly_fields = ('note_preview', 'created_at')
+    can_delete = False               # prevent deletion
     classes = ('collapse',)
-    
+
     def note_preview(self, obj):
-        """Preview of note"""
         return obj.note[:50] + "..." if len(obj.note) > 50 else obj.note
     note_preview.short_description = 'Note'
 
 
 class InterviewInline(admin.TabularInline):
-    """Inline for Interviews"""
     model = Interview
     extra = 0
-    max_num = 3
+    max_num = 0
     fields = ('scheduled_date', 'interview_type', 'duration', 'status', 'meeting_link')
+    can_delete = False
     classes = ('collapse',)
 
 
 class CandidateTagInline(admin.TabularInline):
-    """Inline for Candidate Tags"""
     model = CandidateTag
     extra = 0
-    max_num = 5
+    max_num = 0
     fields = ('tag', 'color', 'created_by', 'created_at')
     readonly_fields = ('created_at',)
+    can_delete = False
     classes = ('collapse',)
 
 
 class CandidateCommunicationInline(admin.TabularInline):
-    """Inline for Communications"""
     model = CandidateCommunication
     extra = 0
-    max_num = 5
+    max_num = 0
     fields = ('communication_type', 'subject', 'content', 'is_outgoing', 'sent_at')
     readonly_fields = ('sent_at',)
+    can_delete = False
     classes = ('collapse',)
 
 
+# ========== APPLICATION ADMIN ==========
 @admin.register(Application)
 class ApplicationAdmin(admin.ModelAdmin):
-    """Professional admin interface for Applications"""
+    """Professional admin interface for Applications – optimized & read‑only"""
     list_display = (
         'application_id',
         'candidate_info',
@@ -63,7 +64,7 @@ class ApplicationAdmin(admin.ModelAdmin):
         'last_activity',
         'priority_flags'
     )
-    
+
     list_filter = (
         'status',
         'is_favorite',
@@ -71,7 +72,7 @@ class ApplicationAdmin(admin.ModelAdmin):
         'applied_at',
         'match_score'
     )
-    
+
     search_fields = (
         'job__title',
         'seeker__user__email',
@@ -80,7 +81,7 @@ class ApplicationAdmin(admin.ModelAdmin):
         'cover_letter',
         'recruiter_notes'
     )
-    
+
     readonly_fields = (
         'application_summary',
         'candidate_details',
@@ -89,7 +90,7 @@ class ApplicationAdmin(admin.ModelAdmin):
         'match_analysis',
         'interview_history'
     )
-    
+
     fieldsets = (
         ('Application Overview', {
             'fields': ('application_summary',),
@@ -135,17 +136,17 @@ class ApplicationAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
-    
+
     inlines = [
         ApplicationNoteInline,
         InterviewInline,
         CandidateTagInline,
         CandidateCommunicationInline
     ]
-    
+
     list_per_page = 25
     date_hierarchy = 'applied_at'
-    list_select_related = ('job', 'seeker__user', 'job__recruiter__company')
+    list_select_related = ('seeker__user', 'job__recruiter__company')  # prefetch in main query
     actions = [
         'mark_as_shortlisted',
         'mark_as_interview',
@@ -154,17 +155,31 @@ class ApplicationAdmin(admin.ModelAdmin):
         'toggle_favorite',
         'export_applications_csv'
     ]
-    
+    show_full_result_count = False           # eliminate duplicate COUNT(*)
+
+    # Read‑only permissions (view only, but actions can modify)
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        # Allow view but not direct editing (actions still work)
+        return request.user.is_superuser
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    # Helper to safely get status display (handles if get_status_display is a method or property)
+    def get_status_display_safe(self, obj):
+        value = obj.get_status_display
+        if callable(value):
+            return value()
+        return value
+
     def application_id(self, obj):
-        """Display application ID"""
-        return format_html(
-            '<strong>#{}</strong>',
-            obj.id
-        )
+        return format_html('<strong>#{}</strong>', obj.id)
     application_id.short_description = 'ID'
-    
+
     def candidate_info(self, obj):
-        """Display candidate information"""
         seeker_url = reverse('admin:accounts_jobseeker_change', args=[obj.seeker.id])
         return format_html(
             '<div style="min-width: 180px;">'
@@ -180,12 +195,10 @@ class ApplicationAdmin(admin.ModelAdmin):
         )
     candidate_info.short_description = 'Candidate'
     candidate_info.admin_order_field = 'seeker__user__last_name'
-    
+
     def job_info(self, obj):
-        """Display job information"""
         job_url = reverse('admin:jobs_job_change', args=[obj.job.id])
         company = obj.job.recruiter.company if obj.job.recruiter.company else None
-        
         return format_html(
             '<div style="min-width: 200px;">'
             '<a href="{}">{}</a><br>'
@@ -201,46 +214,43 @@ class ApplicationAdmin(admin.ModelAdmin):
             company.name[:20] + "..." if company and len(company.name) > 20 else (company.name if company else 'No company')
         )
     job_info.short_description = 'Job'
-    
+
     def application_status(self, obj):
-        """Display application status badge"""
         status_config = {
-            'new': ('#17a2b8', '🆕'),  # info blue
-            'pending': ('#ffc107', '⏳'),  # warning yellow
-            'reviewed': ('#6c757d', '👁️'),  # secondary gray
-            'shortlisted': ('#28a745', '⭐'),  # success green
-            'interview': ('#007bff', '👔'),  # primary blue
-            'offer': ('#20c997', '📄'),  # teal
-            'hired': ('#28a745', '✅'),  # success green
-            'rejected': ('#dc3545', '❌'),  # danger red
-            'accepted': ('#28a745', '✅'),  # success green
-            'withdrawn': ('#343a40', '🚪'),  # dark
+            'new': ('#17a2b8', '🆕'),
+            'pending': ('#ffc107', '⏳'),
+            'reviewed': ('#6c757d', '👁️'),
+            'shortlisted': ('#28a745', '⭐'),
+            'interview': ('#007bff', '👔'),
+            'offer': ('#20c997', '📄'),
+            'hired': ('#28a745', '✅'),
+            'rejected': ('#dc3545', '❌'),
+            'accepted': ('#28a745', '✅'),
+            'withdrawn': ('#343a40', '🚪'),
         }
-        
         color, icon = status_config.get(obj.status, ('#6c757d', '❓'))
-        
+        # Use safe display helper
+        status_display = self.get_status_display_safe(obj)
         return format_html(
             '<span style="background-color: {}; color: white; padding: 3px 8px; '
             'border-radius: 12px; font-size: 11px; font-weight: bold;">{} {}</span>',
-            color, icon, obj.get_status_display
+            color, icon, status_display
         )
     application_status.short_description = 'Status'
-    
+
     def match_score_bar(self, obj):
-        """Display match score as progress bar"""
         if obj.match_score >= 80:
-            color = '#28a745'  # green
+            color = '#28a745'
             label = 'Excellent'
         elif obj.match_score >= 60:
-            color = '#17a2b8'  # blue
+            color = '#17a2b8'
             label = 'Good'
         elif obj.match_score >= 40:
-            color = '#ffc107'  # yellow
+            color = '#ffc107'
             label = 'Fair'
         else:
-            color = '#dc3545'  # red
+            color = '#dc3545'
             label = 'Poor'
-        
         return format_html(
             '<div style="min-width: 120px;">'
             '<div style="height: 8px; background: #e9ecef; border-radius: 4px; margin-bottom: 3px;">'
@@ -251,9 +261,8 @@ class ApplicationAdmin(admin.ModelAdmin):
             color, obj.match_score, color, label, obj.match_score
         )
     match_score_bar.short_description = 'Match'
-    
+
     def applied_date(self, obj):
-        """Format applied date"""
         delta = timezone.now() - obj.applied_at
         if delta.days == 0:
             return "Today"
@@ -263,9 +272,8 @@ class ApplicationAdmin(admin.ModelAdmin):
             return f"{delta.days}d ago"
         return obj.applied_at.strftime('%b %d')
     applied_date.short_description = 'Applied'
-    
+
     def last_activity(self, obj):
-        """Display last activity"""
         if obj.last_active:
             delta = timezone.now() - obj.last_active
             if delta.days == 0:
@@ -280,64 +288,48 @@ class ApplicationAdmin(admin.ModelAdmin):
             return obj.last_active.strftime('%b %d')
         return "Never"
     last_activity.short_description = 'Activity'
-    
+
     def priority_flags(self, obj):
-        """Display priority flags"""
         flags = []
-        
         if obj.is_favorite:
             flags.append('⭐')
-        if hasattr(obj, 'has_scheduled_interview') and obj.has_scheduled_interview:
+        # Use the annotated field (renamed to avoid conflict with model property)
+        if getattr(obj, '_has_scheduled_interview', False):
             flags.append('👔')
         if obj.offer_made:
             flags.append('📄')
         if obj.is_archived:
             flags.append('📁')
-        
         if flags:
-            return format_html(
-                '<div style="font-size: 16px;">{}</div>',
-                ' '.join(flags)
-            )
+            return format_html('<div style="font-size: 16px;">{}</div>', ' '.join(flags))
         return ''
     priority_flags.short_description = 'Flags'
-    
-    # Detail view methods - Now these are simple properties that won't break forms
+
+    # Detail view methods
     def application_summary(self, obj):
-        """Display application summary"""
         if obj.pk:
             rating = '★' * (obj.recruiter_rating or 0) + '☆' * (5 - (obj.recruiter_rating or 0)) if obj.recruiter_rating else 'Not rated'
-            
             return format_html(
                 '''
                 <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
                     <h3 style="margin-top: 0;">Application Summary</h3>
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
-                        <div>
-                            <p><strong>Application ID:</strong> #{}</p>
-                            <p><strong>Applied On:</strong> {}</p>
-                            <p><strong>Current Status:</strong> {}</p>
-                        </div>
-                        <div>
-                            <p><strong>Match Score:</strong> {}%</p>
-                            <p><strong>Recruiter Rating:</strong> {}</p>
-                            <p><strong>Messages:</strong> {}</p>
-                        </div>
+                        <div><p><strong>Application ID:</strong> #{}</p><p><strong>Applied On:</strong> {}</p><p><strong>Current Status:</strong> {}</p></div>
+                        <div><p><strong>Match Score:</strong> {}%</p><p><strong>Recruiter Rating:</strong> {}</p><p><strong>Messages:</strong> {}</p></div>
                     </div>
                 </div>
                 ''',
                 obj.id,
                 obj.applied_at.strftime('%B %d, %Y at %I:%M %p'),
-                self.application_status(obj),
+                self.application_status(obj),  # this already uses safe display
                 obj.match_score,
                 rating,
                 obj.messages_count
             )
         return format_html('<p>Save the application to see summary</p>')
-    
+
     def candidate_details(self, obj):
-        """Display candidate details"""
-        if obj.pk:  # Only show when editing existing object
+        if obj.pk:
             seeker = obj.seeker
             profile_score = 0
             fields = ['title', 'bio', 'phone_number', 'location', 'resume']
@@ -348,23 +340,13 @@ class ApplicationAdmin(admin.ModelAdmin):
                 profile_score += 10
             if seeker.skills.exists():
                 profile_score += 10
-            
             return format_html(
                 '<div style="background: #e8f4fd; padding: 15px; border-radius: 8px; margin-bottom: 20px;">'
                 '<h4 style="margin-top: 0;">Candidate Details</h4>'
                 '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">'
-                '<div>'
-                '<p><strong>Name:</strong> {} {}</p>'
-                '<p><strong>Email:</strong> {}</p>'
-                '<p><strong>Phone:</strong> {}</p>'
-                '</div>'
-                '<div>'
-                '<p><strong>Location:</strong> {}</p>'
-                '<p><strong>Professional Title:</strong> {}</p>'
-                '<p><strong>Profile Score:</strong> {}%</p>'
-                '</div>'
-                '</div>'
-                '</div>',
+                '<div><p><strong>Name:</strong> {} {}</p><p><strong>Email:</strong> {}</p><p><strong>Phone:</strong> {}</p></div>'
+                '<div><p><strong>Location:</strong> {}</p><p><strong>Professional Title:</strong> {}</p><p><strong>Profile Score:</strong> {}%</p></div>'
+                '</div></div>',
                 seeker.user.first_name or '',
                 seeker.user.last_name or '',
                 seeker.user.email,
@@ -375,29 +357,18 @@ class ApplicationAdmin(admin.ModelAdmin):
             )
         return format_html('<p>Save the application to see candidate details</p>')
     candidate_details.short_description = ''
-    
+
     def job_details(self, obj):
-        """Display job details"""
-        if obj.pk:  # Only show when editing existing object
+        if obj.pk:
             job = obj.job
             company = job.recruiter.company if job.recruiter.company else None
-            
             return format_html(
                 '<div style="background: #f0f8f0; padding: 15px; border-radius: 8px; margin-bottom: 20px;">'
                 '<h4 style="margin-top: 0;">Job Details</h4>'
                 '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">'
-                '<div>'
-                '<p><strong>Position:</strong> {}</p>'
-                '<p><strong>Company:</strong> {}</p>'
-                '<p><strong>Location:</strong> {}</p>'
-                '</div>'
-                '<div>'
-                '<p><strong>Job Type:</strong> {}</p>'
-                '<p><strong>Experience Level:</strong> {}</p>'
-                '<p><strong>Salary:</strong> {}</p>'
-                '</div>'
-                '</div>'
-                '</div>',
+                '<div><p><strong>Position:</strong> {}</p><p><strong>Company:</strong> {}</p><p><strong>Location:</strong> {}</p></div>'
+                '<div><p><strong>Job Type:</strong> {}</p><p><strong>Experience Level:</strong> {}</p><p><strong>Salary:</strong> {}</p></div>'
+                '</div></div>',
                 job.title,
                 company.name if company else 'Not specified',
                 job.location,
@@ -407,68 +378,50 @@ class ApplicationAdmin(admin.ModelAdmin):
             )
         return format_html('<p>Save the application to see job details</p>')
     job_details.short_description = ''
-    
+
     def application_timeline(self, obj):
-        """Display application timeline"""
-        if obj.pk:  # Only show when editing existing object
-            events = [
-                ('📝', 'Applied', obj.applied_at),
-            ]
-            
+        if obj.pk:
+            events = [('📝', 'Applied', obj.applied_at)]
             if obj.last_viewed:
                 events.append(('👁️', 'Last Viewed', obj.last_viewed))
             if obj.last_message_at:
                 events.append(('💬', 'Last Message', obj.last_message_at))
             if obj.last_active:
                 events.append(('🔄', 'Last Active', obj.last_active))
-            
             timeline_divs = []
             for icon, label, timestamp in sorted(events, key=lambda x: x[2], reverse=True):
-                timeline_html = f'''
-                <div style="display: flex; align-items: start; margin-bottom: 10px;">
-                    <div style="font-size: 16px; margin-right: 10px;">{icon}</div>
-                    <div>
-                        <div>{label}</div>
-                        <small style="color: #666;">{timestamp.strftime('%b %d, %Y %H:%M')}</small>
-                    </div>
-                </div>
-                '''
-                timeline_divs.append(timeline_html)
-            
+                timeline_divs.append(
+                    f'<div style="display: flex; align-items: start; margin-bottom: 10px;">'
+                    f'<div style="font-size: 16px; margin-right: 10px;">{icon}</div>'
+                    f'<div><div>{label}</div><small style="color: #666;">{timestamp.strftime("%b %d, %Y %H:%M")}</small></div>'
+                    f'</div>'
+                )
             return format_html(
                 '<div style="background: #fff8e1; padding: 15px; border-radius: 8px; margin-bottom: 20px;">'
                 '<h4 style="margin-top: 0;">Application Timeline</h4>'
-                '{}'
-                '</div>',
+                '{}</div>',
                 format_html(''.join(timeline_divs))
             )
         return format_html('<p>Save the application to see timeline</p>')
     application_timeline.short_description = ''
-    
+
     def match_analysis(self, obj):
-        """Display match analysis"""
-        if obj.pk:  # Only show when editing existing object
+        if obj.pk:
             analysis_items = []
-            
             if obj.match_score >= 80:
                 analysis_items.append('<div style="margin-bottom: 8px;"><span style="font-size: 16px;">✅</span> Excellent match with job requirements</div>')
             elif obj.match_score >= 60:
                 analysis_items.append('<div style="margin-bottom: 8px;"><span style="font-size: 16px;">⚠️</span> Good match, minor gaps identified</div>')
             else:
                 analysis_items.append('<div style="margin-bottom: 8px;"><span style="font-size: 16px;">❌</span> Poor match with job requirements</div>')
-            
             if obj.recruiter_rating and obj.recruiter_rating >= 4:
                 analysis_items.append('<div style="margin-bottom: 8px;"><span style="font-size: 16px;">⭐</span> Highly rated by recruiter</div>')
-            
             if obj.is_favorite:
                 analysis_items.append('<div style="margin-bottom: 8px;"><span style="font-size: 16px;">❤️</span> Marked as favorite</div>')
-            
             if analysis_items:
                 return format_html(
                     '<div style="background: #f5f5f5; padding: 15px; border-radius: 8px; margin-bottom: 20px;">'
-                    '<h4 style="margin-top: 0;">Match Analysis</h4>'
-                    '{}'
-                    '</div>',
+                    '<h4 style="margin-top: 0;">Match Analysis</h4>{}</div>',
                     format_html(''.join(analysis_items))
                 )
             return format_html('<p style="color: #666;">No analysis available</p>')
@@ -476,8 +429,7 @@ class ApplicationAdmin(admin.ModelAdmin):
     match_analysis.short_description = ''
 
     def interview_history(self, obj):
-        """Display interview history"""
-        if obj.pk:  # Only show when editing existing object
+        if obj.pk:
             interviews = obj.interviews.all()
             if interviews:
                 history_divs = []
@@ -488,99 +440,89 @@ class ApplicationAdmin(admin.ModelAdmin):
                         'cancelled': '#dc3545',
                         'rescheduled': '#ffc107',
                     }.get(interview.status, '#6c757d')
-                    
-                    # Build the interview HTML block
-                    interview_html = f'''
-                    <div style="background: white; border: 1px solid #dee2e6; border-radius: 5px; padding: 10px; margin-bottom: 10px;">
-                        <h6 style="margin-top: 0; margin-bottom: 5px;">{interview.scheduled_date.strftime("%b %d, %Y %I:%M %p")}</h6>
-                        <p style="margin-bottom: 5px;">
-                            <span style="background-color: {status_color}; color: white; padding: 2px 6px; border-radius: 10px; font-size: 11px;">{interview.get_status_display()}</span>
-                            <span style="background-color: #6c757d; color: white; padding: 2px 6px; border-radius: 10px; font-size: 11px; margin-left: 5px;">{interview.get_interview_type_display()}</span>
-                        </p>
-                    </div>
-                    '''
-                    history_divs.append(interview_html)
-                
-                # Join all HTML blocks and wrap in container
+                    history_divs.append(
+                        f'<div style="background: white; border: 1px solid #dee2e6; border-radius: 5px; padding: 10px; margin-bottom: 10px;">'
+                        f'<h6 style="margin-top: 0; margin-bottom: 5px;">{interview.scheduled_date.strftime("%b %d, %Y %I:%M %p")}</h6>'
+                        f'<p style="margin-bottom: 5px;">'
+                        f'<span style="background-color: {status_color}; color: white; padding: 2px 6px; border-radius: 10px; font-size: 11px;">{interview.get_status_display()}</span>'
+                        f'<span style="background-color: #6c757d; color: white; padding: 2px 6px; border-radius: 10px; font-size: 11px; margin-left: 5px;">{interview.get_interview_type_display()}</span>'
+                        f'</p></div>'
+                    )
                 return format_html(
                     '<div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px;">'
-                    '<h4 style="margin-top: 0;">Interview History</h4>'
-                    '{}'
-                    '</div>',
+                    '<h4 style="margin-top: 0;">Interview History</h4>{}</div>',
                     format_html(''.join(history_divs))
                 )
             return format_html('<p style="color: #666;">No interviews scheduled</p>')
         return format_html('<p>Save the application to see interview history</p>')
     interview_history.short_description = ''
-    
+
+    # Actions
     @admin.action(description="Mark as shortlisted")
     def mark_as_shortlisted(self, request, queryset):
-        """Mark applications as shortlisted"""
         updated = queryset.update(status='shortlisted')
         self.message_user(request, f'{updated} application(s) marked as shortlisted.')
-    
+
     @admin.action(description="Mark for interview")
     def mark_as_interview(self, request, queryset):
-        """Mark applications for interview"""
         updated = queryset.update(status='interview')
         self.message_user(request, f'{updated} application(s) marked for interview.')
-    
+
     @admin.action(description="Mark as rejected")
     def mark_as_rejected(self, request, queryset):
-        """Mark applications as rejected"""
         updated = queryset.update(status='rejected')
         self.message_user(request, f'{updated} application(s) rejected.')
-    
+
     @admin.action(description="Mark as hired")
     def mark_as_hired(self, request, queryset):
-        """Mark applications as hired"""
         for app in queryset:
             app.status = 'hired'
             app.hired_date = timezone.now()
             app.save()
         self.message_user(request, f'{queryset.count()} candidate(s) hired.')
-    
+
     @admin.action(description="Toggle favorite")
     def toggle_favorite(self, request, queryset):
-        """Toggle favorite status"""
         for app in queryset:
             app.is_favorite = not app.is_favorite
             app.save()
         self.message_user(request, f'{queryset.count()} application(s) favorite status toggled.')
-    
+
     @admin.action(description="Export to CSV")
     def export_applications_csv(self, request, queryset):
-        """Export applications to CSV"""
         import csv
         from django.http import HttpResponse
-        
         response = HttpResponse(content_type='text/csv')
         response['Content-Disposition'] = 'attachment; filename="applications_export.csv"'
-        
         writer = csv.writer(response)
-        writer.writerow([
-            'ID', 'Candidate', 'Email', 'Job Title', 'Company', 'Status',
-            'Match Score', 'Applied Date', 'Rating'
-        ])
-        
+        writer.writerow(['ID', 'Candidate', 'Email', 'Job Title', 'Company', 'Status', 'Match Score', 'Applied Date', 'Rating'])
         for app in queryset:
+            # Use safe display helper
+            status_display = self.get_status_display_safe(app)
             writer.writerow([
                 app.id,
                 f"{app.seeker.user.first_name} {app.seeker.user.last_name}",
                 app.seeker.user.email,
                 app.job.title,
                 app.job.recruiter.company.name if app.job.recruiter.company else '',
-                app.get_status_display,
+                status_display,
                 app.match_score,
                 app.applied_at.strftime('%Y-%m-%d'),
                 app.recruiter_rating or ''
             ])
-        
         return response
-    
+
     def get_queryset(self, request):
-        """Optimize queryset"""
         qs = super().get_queryset(request)
+        # Annotate with scheduled interview existence (renamed to avoid conflict with model property)
+        qs = qs.annotate(
+            _has_scheduled_interview=Exists(
+                Interview.objects.filter(
+                    application=OuterRef('pk'),
+                    status='scheduled'
+                )
+            )
+        )
         return qs.select_related(
             'seeker__user',
             'job__recruiter__company',
@@ -593,100 +535,61 @@ class ApplicationAdmin(admin.ModelAdmin):
         )
 
 
+# ========== APPLICATION NOTE ADMIN ==========
 @admin.register(ApplicationNote)
 class ApplicationNoteAdmin(admin.ModelAdmin):
-    """Admin interface for Application Notes"""
-    list_display = (
-        'id',
-        'application_link',
-        'recruiter_link',
-        'note_preview',
-        'privacy_badge',
-        'created_at'
-    )
-    
-    list_filter = (
-        'is_private',
-        'created_at',
-        'recruiter'
-    )
-    
-    search_fields = (
-        'note',
-        'application__seeker__user__email',
-        'recruiter__user__email'
-    )
-    
-    readonly_fields = (
-        'application_details',
-        'recruiter_details',
-        'created_at_display'
-    )
-    
+    list_display = ('id', 'application_link', 'recruiter_link', 'note_preview', 'privacy_badge', 'created_at')
+    list_filter = ('is_private', 'created_at', 'recruiter')
+    search_fields = ('note', 'application__seeker__user__email', 'recruiter__user__email')
+    readonly_fields = ('application_details', 'recruiter_details', 'created_at_display')
     fieldsets = (
-        ('Note Details', {
-            'fields': ('application', 'recruiter', 'note', 'is_private')
-        }),
-        ('Application Details', {
-            'fields': ('application_details',),
-            'classes': ('collapse',)
-        }),
-        ('Recruiter Details', {
-            'fields': ('recruiter_details',),
-            'classes': ('collapse',)
-        }),
-        ('Metadata', {
-            'fields': ('created_at_display',),
-            'classes': ('collapse',)
-        }),
+        ('Note Details', {'fields': ('application', 'recruiter', 'note', 'is_private')}),
+        ('Application Details', {'fields': ('application_details',), 'classes': ('collapse',)}),
+        ('Recruiter Details', {'fields': ('recruiter_details',), 'classes': ('collapse',)}),
+        ('Metadata', {'fields': ('created_at_display',), 'classes': ('collapse',)}),
     )
-    
     list_per_page = 25
     date_hierarchy = 'created_at'
-    
+    show_full_result_count = False
+
+    def has_add_permission(self, request):
+        return False
+    def has_change_permission(self, request, obj=None):
+        return False
+    def has_delete_permission(self, request, obj=None):
+        return False
+
     def application_link(self, obj):
-        """Display application link"""
         url = reverse('admin:applications_application_change', args=[obj.application.id])
-        return format_html(
-            '<a href="{}">#{}</a><br>'
-            '<small style="color: #666;">{}</small>',
-            url, obj.application.id,
-            obj.application.job.title[:30] + "..." if len(obj.application.job.title) > 30 else obj.application.job.title
-        )
+        return format_html('<a href="{}">#{}</a><br><small style="color: #666;">{}</small>',
+                           url, obj.application.id,
+                           obj.application.job.title[:30] + "..." if len(obj.application.job.title) > 30 else obj.application.job.title)
     application_link.short_description = 'Application'
-    
+
     def recruiter_link(self, obj):
-        """Display recruiter link"""
         url = reverse('admin:accounts_recruiter_change', args=[obj.recruiter.id])
-        return format_html(
-            '<a href="{}">{}</a>',
-            url, obj.recruiter.user.email
-        )
+        return format_html('<a href="{}">{}</a>', url, obj.recruiter.user.email)
     recruiter_link.short_description = 'Recruiter'
-    
+
     def note_preview(self, obj):
-        """Display note preview"""
         preview = obj.note[:60] + "..." if len(obj.note) > 60 else obj.note
         return format_html('<div style="max-width: 200px;">{}</div>', preview)
     note_preview.short_description = 'Note'
-    
+
     def privacy_badge(self, obj):
-        """Display privacy badge"""
         if obj.is_private:
             return format_html('<span style="background-color: #dc3545; color: white; padding: 2px 6px; border-radius: 10px; font-size: 11px;">Private</span>')
         return format_html('<span style="background-color: #28a745; color: white; padding: 2px 6px; border-radius: 10px; font-size: 11px;">Public</span>')
     privacy_badge.short_description = 'Privacy'
-    
+
     def application_details(self, obj):
-        """Display application details"""
         if obj.pk:
             return format_html(
-                '<div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px;">'
-                '<h4 style="margin-top: 0;">Application Details</h4>'
+                '<div style="background: #f8f9fa; padding: 15px; border-radius: 8px;">'
+                '<h4>Application Details</h4>'
                 '<p><strong>ID:</strong> #{}</p>'
                 '<p><strong>Candidate:</strong> {} {}</p>'
-                '<p><strong>Job:</strong> {}</p>'
-                '</div>',
+                '<p><strong>Job:</strong> {}</p></div>',
                 obj.application.id,
                 obj.application.seeker.user.first_name or '',
                 obj.application.seeker.user.last_name or '',
@@ -694,17 +597,15 @@ class ApplicationNoteAdmin(admin.ModelAdmin):
             )
         return ''
     application_details.short_description = ''
-    
+
     def recruiter_details(self, obj):
-        """Display recruiter details"""
         if obj.pk:
             return format_html(
-                '<div style="background: #e8f4fd; padding: 15px; border-radius: 8px; margin-bottom: 20px;">'
-                '<h4 style="margin-top: 0;">Recruiter Details</h4>'
+                '<div style="background: #e8f4fd; padding: 15px; border-radius: 8px;">'
+                '<h4>Recruiter Details</h4>'
                 '<p><strong>Name:</strong> {} {}</p>'
                 '<p><strong>Email:</strong> {}</p>'
-                '<p><strong>Company:</strong> {}</p>'
-                '</div>',
+                '<p><strong>Company:</strong> {}</p></div>',
                 obj.recruiter.user.first_name or '',
                 obj.recruiter.user.last_name or '',
                 obj.recruiter.user.email,
@@ -712,161 +613,104 @@ class ApplicationNoteAdmin(admin.ModelAdmin):
             )
         return ''
     recruiter_details.short_description = ''
-    
+
     def created_at_display(self, obj):
-        """Format creation date"""
         if obj.pk:
             return obj.created_at.strftime('%B %d, %Y at %I:%M %p')
         return ''
     created_at_display.short_description = 'Created'
 
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related(
+            'application__job',
+            'application__seeker__user',
+            'recruiter__user',
+            'recruiter__company'
+        )
 
+
+# ========== INTERVIEW ADMIN ==========
 @admin.register(Interview)
 class InterviewAdmin(admin.ModelAdmin):
-    """Admin interface for Interviews"""
-    list_display = (
-        'id',
-        'candidate_info',
-        'scheduled_date',
-        'interview_type_badge',
-        'duration',
-        'status_badge',
-        'has_feedback'
-    )
-    
-    list_filter = (
-        'status',
-        'interview_type',
-        'scheduled_date',
-    )
-    
-    search_fields = (
-        'application__seeker__user__email',
-        'application__job__title',
-        'feedback',
-        'location'
-    )
-    
-    readonly_fields = (
-        'application_details',
-        'timing_info',
-        'scheduler_details'
-    )
-    
+    list_display = ('id', 'candidate_info', 'scheduled_date', 'interview_type_badge', 'duration', 'status_badge', 'has_feedback')
+    list_filter = ('status', 'interview_type', 'scheduled_date')
+    search_fields = ('application__seeker__user__email', 'application__job__title', 'feedback', 'location')
+    readonly_fields = ('application_details', 'timing_info', 'scheduler_details')
     fieldsets = (
-        ('Interview Details', {
-            'fields': ('application', 'scheduled_date', 'duration', 'interview_type', 'status')
-        }),
-        ('Logistics', {
-            'fields': ('meeting_link', 'location'),
-            'classes': ('collapse',)
-        }),
-        ('Feedback', {
-            'fields': ('feedback', 'rating'),
-            'classes': ('collapse',)
-        }),
-        ('Scheduler', {
-            'fields': ('scheduled_by',),
-            'classes': ('collapse',)
-        }),
-        ('Application Details', {
-            'fields': ('application_details',),
-            'classes': ('collapse',)
-        }),
-        ('Timing Information', {
-            'fields': ('timing_info',),
-            'classes': ('collapse',)
-        }),
-        ('Scheduler Details', {
-            'fields': ('scheduler_details',),
-            'classes': ('collapse',)
-        }),
+        ('Interview Details', {'fields': ('application', 'scheduled_date', 'duration', 'interview_type', 'status')}),
+        ('Logistics', {'fields': ('meeting_link', 'location'), 'classes': ('collapse',)}),
+        ('Feedback', {'fields': ('feedback', 'rating'), 'classes': ('collapse',)}),
+        ('Scheduler', {'fields': ('scheduled_by',), 'classes': ('collapse',)}),
+        ('Application Details', {'fields': ('application_details',), 'classes': ('collapse',)}),
+        ('Timing Information', {'fields': ('timing_info',), 'classes': ('collapse',)}),
+        ('Scheduler Details', {'fields': ('scheduler_details',), 'classes': ('collapse',)}),
     )
-    
     list_per_page = 25
     date_hierarchy = 'scheduled_date'
-    
+    show_full_result_count = False
+
+    def has_add_permission(self, request):
+        return False
+    def has_change_permission(self, request, obj=None):
+        return False
+    def has_delete_permission(self, request, obj=None):
+        return False
+
     def candidate_info(self, obj):
-        """Display candidate information"""
         app = obj.application
         return format_html(
             '<div style="min-width: 180px;">'
             '<strong>{} {}</strong><br>'
             '<small style="color: #666;">📧 {}</small><br>'
-            '<small>For: {}</small>'
-            '</div>',
+            '<small>For: {}</small></div>',
             app.seeker.user.first_name or '',
             app.seeker.user.last_name or '',
             app.seeker.user.email,
             app.job.title[:30] + "..." if len(app.job.title) > 30 else app.job.title
         )
     candidate_info.short_description = 'Candidate'
-    
+
     def interview_type_badge(self, obj):
-        """Display interview type badge"""
-        type_colors = {
-            'phone': '#17a2b8',
-            'video': '#007bff',
-            'onsite': '#ffc107',
-            'technical': '#dc3545',
-        }
+        type_colors = {'phone': '#17a2b8', 'video': '#007bff', 'onsite': '#ffc107', 'technical': '#dc3545'}
         color = type_colors.get(obj.interview_type, '#6c757d')
-        return format_html(
-            '<span style="background-color: {}; color: white; padding: 3px 8px; '
-            'border-radius: 12px; font-size: 11px; font-weight: bold;">{}</span>',
-            color, obj.get_interview_type_display()
-        )
+        return format_html('<span style="background-color: {}; color: white; padding: 3px 8px; border-radius: 12px; font-size: 11px;">{}</span>',
+                           color, obj.get_interview_type_display())
     interview_type_badge.short_description = 'Type'
-    
+
     def status_badge(self, obj):
-        """Display status badge"""
-        status_colors = {
-            'scheduled': '#17a2b8',
-            'completed': '#28a745',
-            'cancelled': '#dc3545',
-            'rescheduled': '#ffc107',
-        }
+        status_colors = {'scheduled': '#17a2b8', 'completed': '#28a745', 'cancelled': '#dc3545', 'rescheduled': '#ffc107'}
         color = status_colors.get(obj.status, '#6c757d')
-        return format_html(
-            '<span style="background-color: {}; color: white; padding: 3px 8px; '
-            'border-radius: 12px; font-size: 11px; font-weight: bold;">{}</span>',
-            color, obj.get_status_display()
-        )
+        return format_html('<span style="background-color: {}; color: white; padding: 3px 8px; border-radius: 12px; font-size: 11px;">{}</span>',
+                           color, obj.get_status_display())
     status_badge.short_description = 'Status'
-    
+
     def has_feedback(self, obj):
-        """Check if feedback exists"""
         if obj.feedback:
             return format_html('<span style="color: #28a745;">✓</span>')
         return format_html('<span style="color: #666;">✗</span>')
     has_feedback.short_description = 'Feedback'
-    
+
     def application_details(self, obj):
-        """Display application details"""
         if obj.pk:
             app = obj.application
             return format_html(
-                '<div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px;">'
-                '<h4 style="margin-top: 0;">Application Details</h4>'
+                '<div style="background: #f8f9fa; padding: 15px; border-radius: 8px;">'
+                '<h4>Application Details</h4>'
                 '<p><strong>Candidate:</strong> {} {}</p>'
                 '<p><strong>Email:</strong> {}</p>'
                 '<p><strong>Job:</strong> {}</p>'
-                '<p><strong>Status:</strong> {}</p>'
-                '</div>',
+                '<p><strong>Status:</strong> {}</p></div>',
                 app.seeker.user.first_name or '',
                 app.seeker.user.last_name or '',
                 app.seeker.user.email,
                 app.job.title,
-                app.get_status_display
+                app.get_status_display()
             )
         return ''
     application_details.short_description = ''
-    
+
     def timing_info(self, obj):
-        """Display timing information"""
         if obj.pk:
-            from django.utils import timezone
-            
             now = timezone.now()
             if obj.scheduled_date > now:
                 time_until = obj.scheduled_date - now
@@ -876,32 +720,28 @@ class InterviewAdmin(admin.ModelAdmin):
                 time_since = now - obj.scheduled_date
                 status = "Past"
                 time_text = f"{time_since.days} days, {time_since.seconds // 3600} hours ago"
-            
             return format_html(
-                '<div style="background: #fff8e1; padding: 15px; border-radius: 8px; margin-bottom: 20px;">'
-                '<h4 style="margin-top: 0;">Timing Information</h4>'
+                '<div style="background: #fff8e1; padding: 15px; border-radius: 8px;">'
+                '<h4>Timing Information</h4>'
                 '<p><strong>Scheduled:</strong> {}</p>'
                 '<p><strong>Ends:</strong> {}</p>'
-                '<p><strong>Status:</strong> {} ({})</p>'
-                '</div>',
+                '<p><strong>Status:</strong> {} ({})</p></div>',
                 obj.scheduled_date.strftime('%B %d, %Y at %I:%M %p'),
                 obj.interview_end_time.strftime('%I:%M %p'),
                 status, time_text
             )
         return ''
     timing_info.short_description = ''
-    
+
     def scheduler_details(self, obj):
-        """Display scheduler details"""
         if obj.pk and obj.scheduled_by:
             return format_html(
-                '<div style="background: #e8f4fd; padding: 15px; border-radius: 8px; margin-bottom: 20px;">'
-                '<h4 style="margin-top: 0;">Scheduled By</h4>'
+                '<div style="background: #e8f4fd; padding: 15px; border-radius: 8px;">'
+                '<h4>Scheduled By</h4>'
                 '<p><strong>Name:</strong> {} {}</p>'
                 '<p><strong>Email:</strong> {}</p>'
                 '<p><strong>Company:</strong> {}</p>'
-                '<p><strong>Designation:</strong> {}</p>'
-                '</div>',
+                '<p><strong>Designation:</strong> {}</p></div>',
                 obj.scheduled_by.user.first_name or '',
                 obj.scheduled_by.user.last_name or '',
                 obj.scheduled_by.user.email,
@@ -911,126 +751,89 @@ class InterviewAdmin(admin.ModelAdmin):
         return format_html('<p style="color: #666;">Not specified</p>')
     scheduler_details.short_description = ''
 
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related(
+            'application__seeker__user',
+            'application__job',
+            'scheduled_by__user',
+            'scheduled_by__company'
+        )
 
+
+# ========== CANDIDATE TAG ADMIN ==========
 @admin.register(CandidateTag)
 class CandidateTagAdmin(admin.ModelAdmin):
-    """Admin interface for Candidate Tags"""
-    list_display = (
-        'tag_display',
-        'application_link',
-        'candidate_info',
-        'created_by_link',
-        'created_at'
-    )
-    
-    list_filter = (
-        'created_at',
-        'created_by'
-    )
-    
-    search_fields = (
-        'tag',
-        'application__seeker__user__email',
-        'created_by__user__email'
-    )
-    
-    readonly_fields = (
-        'application_details',
-        'creator_details',
-        'created_at_display'
-    )
-    
+    list_display = ('tag_display', 'application_link', 'candidate_info', 'created_by_link', 'created_at')
+    list_filter = ('created_at', 'created_by')
+    search_fields = ('tag', 'application__seeker__user__email', 'created_by__user__email')
+    readonly_fields = ('application_details', 'creator_details', 'created_at_display')
     fieldsets = (
-        ('Tag Information', {
-            'fields': ('application', 'tag', 'color', 'created_by')
-        }),
-        ('Application Details', {
-            'fields': ('application_details',),
-            'classes': ('collapse',)
-        }),
-        ('Creator Details', {
-            'fields': ('creator_details',),
-            'classes': ('collapse',)
-        }),
-        ('Metadata', {
-            'fields': ('created_at_display',),
-            'classes': ('collapse',)
-        }),
+        ('Tag Information', {'fields': ('application', 'tag', 'color', 'created_by')}),
+        ('Application Details', {'fields': ('application_details',), 'classes': ('collapse',)}),
+        ('Creator Details', {'fields': ('creator_details',), 'classes': ('collapse',)}),
+        ('Metadata', {'fields': ('created_at_display',), 'classes': ('collapse',)}),
     )
-    
     list_per_page = 25
     date_hierarchy = 'created_at'
-    
+    show_full_result_count = False
+
+    def has_add_permission(self, request):
+        return False
+    def has_change_permission(self, request, obj=None):
+        return False
+    def has_delete_permission(self, request, obj=None):
+        return False
+
     def tag_display(self, obj):
-        """Display tag with color"""
         return format_html(
-            '<span style="background-color: {}; color: white; padding: 5px 10px; '
-            'border-radius: 12px; font-size: 12px; font-weight: bold;">{}</span>',
+            '<span style="background-color: {}; color: white; padding: 5px 10px; border-radius: 12px; font-size: 12px;">{}</span>',
             obj.color, obj.tag
         )
     tag_display.short_description = 'Tag'
-    
+
     def application_link(self, obj):
-        """Display application link"""
         url = reverse('admin:applications_application_change', args=[obj.application.id])
-        return format_html(
-            '<a href="{}">#{}</a>',
-            url, obj.application.id
-        )
+        return format_html('<a href="{}">#{}</a>', url, obj.application.id)
     application_link.short_description = 'Application'
-    
+
     def candidate_info(self, obj):
-        """Display candidate information"""
         seeker = obj.application.seeker
-        return format_html(
-            '{} {}<br>'
-            '<small style="color: #666;">📧 {}</small>',
-            seeker.user.first_name or '',
-            seeker.user.last_name or '',
-            seeker.user.email
-        )
+        return format_html('{} {}<br><small style="color: #666;">📧 {}</small>',
+                           seeker.user.first_name or '', seeker.user.last_name or '', seeker.user.email)
     candidate_info.short_description = 'Candidate'
-    
+
     def created_by_link(self, obj):
-        """Display creator link"""
         url = reverse('admin:accounts_recruiter_change', args=[obj.created_by.id])
-        return format_html(
-            '<a href="{}">{}</a>',
-            url, obj.created_by.user.email
-        )
+        return format_html('<a href="{}">{}</a>', url, obj.created_by.user.email)
     created_by_link.short_description = 'Created By'
-    
+
     def application_details(self, obj):
-        """Display application details"""
         if obj.pk:
             app = obj.application
             return format_html(
-                '<div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px;">'
-                '<h4 style="margin-top: 0;">Application Details</h4>'
+                '<div style="background: #f8f9fa; padding: 15px; border-radius: 8px;">'
+                '<h4>Application Details</h4>'
                 '<p><strong>ID:</strong> #{}</p>'
                 '<p><strong>Candidate:</strong> {} {}</p>'
                 '<p><strong>Job:</strong> {}</p>'
-                '<p><strong>Status:</strong> {}</p>'
-                '</div>',
+                '<p><strong>Status:</strong> {}</p></div>',
                 app.id,
                 app.seeker.user.first_name or '',
                 app.seeker.user.last_name or '',
                 app.job.title,
-                app.get_status_display
+                app.get_status_display()
             )
         return ''
     application_details.short_description = ''
-    
+
     def creator_details(self, obj):
-        """Display creator details"""
         if obj.pk:
             return format_html(
-                '<div style="background: #e8f4fd; padding: 15px; border-radius: 8px; margin-bottom: 20px;">'
-                '<h4 style="margin-top: 0;">Created By</h4>'
+                '<div style="background: #e8f4fd; padding: 15px; border-radius: 8px;">'
+                '<h4>Created By</h4>'
                 '<p><strong>Recruiter:</strong> {} {}</p>'
                 '<p><strong>Email:</strong> {}</p>'
-                '<p><strong>Company:</strong> {}</p>'
-                '</div>',
+                '<p><strong>Company:</strong> {}</p></div>',
                 obj.created_by.user.first_name or '',
                 obj.created_by.user.last_name or '',
                 obj.created_by.user.email,
@@ -1038,137 +841,90 @@ class CandidateTagAdmin(admin.ModelAdmin):
             )
         return ''
     creator_details.short_description = ''
-    
+
     def created_at_display(self, obj):
-        """Format creation date"""
         if obj.pk:
             return obj.created_at.strftime('%B %d, %Y at %I:%M %p')
         return ''
     created_at_display.short_description = 'Created'
 
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related(
+            'application__seeker__user',
+            'application__job',
+            'created_by__user',
+            'created_by__company'
+        )
 
+
+# ========== CANDIDATE COMMUNICATION ADMIN ==========
 @admin.register(CandidateCommunication)
 class CandidateCommunicationAdmin(admin.ModelAdmin):
-    """Admin interface for Candidate Communications"""
-    list_display = (
-        'id',
-        'application_link',
-        'type_badge',
-        'subject_preview',
-        'direction_badge',
-        'sent_at',
-        'recruiter_link'
-    )
-    
-    list_filter = (
-        'communication_type',
-        'is_outgoing',
-        'sent_at',
-        'recruiter'
-    )
-    
-    search_fields = (
-        'subject',
-        'content',
-        'application__seeker__user__email',
-        'recruiter__user__email'
-    )
-    
-    readonly_fields = (
-        'application_details',
-        'communication_content',
-        'recruiter_details',
-        'sent_at_display'
-    )
-    
+    list_display = ('id', 'application_link', 'type_badge', 'subject_preview', 'direction_badge', 'sent_at', 'recruiter_link')
+    list_filter = ('communication_type', 'is_outgoing', 'sent_at', 'recruiter')
+    search_fields = ('subject', 'content', 'application__seeker__user__email', 'recruiter__user__email')
+    readonly_fields = ('application_details', 'communication_content', 'recruiter_details', 'sent_at_display')
     fieldsets = (
-        ('Communication Details', {
-            'fields': ('application', 'recruiter', 'communication_type', 'subject', 'content', 'is_outgoing', 'attachments')
-        }),
-        ('Application Details', {
-            'fields': ('application_details',),
-            'classes': ('collapse',)
-        }),
-        ('Communication Content', {
-            'fields': ('communication_content',),
-            'classes': ('collapse',)
-        }),
-        ('Recruiter Details', {
-            'fields': ('recruiter_details',),
-            'classes': ('collapse',)
-        }),
-        ('Metadata', {
-            'fields': ('sent_at_display',),
-            'classes': ('collapse',)
-        }),
+        ('Communication Details', {'fields': ('application', 'recruiter', 'communication_type', 'subject', 'content', 'is_outgoing', 'attachments')}),
+        ('Application Details', {'fields': ('application_details',), 'classes': ('collapse',)}),
+        ('Communication Content', {'fields': ('communication_content',), 'classes': ('collapse',)}),
+        ('Recruiter Details', {'fields': ('recruiter_details',), 'classes': ('collapse',)}),
+        ('Metadata', {'fields': ('sent_at_display',), 'classes': ('collapse',)}),
     )
-    
     list_per_page = 25
     date_hierarchy = 'sent_at'
-    
+    show_full_result_count = False
+
+    def has_add_permission(self, request):
+        return False
+    def has_change_permission(self, request, obj=None):
+        return False
+    def has_delete_permission(self, request, obj=None):
+        return False
+
     def application_link(self, obj):
-        """Display application link"""
         url = reverse('admin:applications_application_change', args=[obj.application.id])
         return format_html(
-            '<a href="{}">#{}</a><br>'
-            '<small style="color: #666;">{}</small>',
+            '<a href="{}">#{}</a><br><small style="color: #666;">{}</small>',
             url, obj.application.id,
             obj.application.job.title[:30] + "..." if len(obj.application.job.title) > 30 else obj.application.job.title
         )
     application_link.short_description = 'Application'
-    
+
     def type_badge(self, obj):
-        """Display communication type badge"""
-        type_colors = {
-            'email': '#007bff',
-            'call': '#17a2b8',
-            'message': '#28a745',
-            'interview': '#ffc107',
-            'offer': '#dc3545',
-        }
+        type_colors = {'email': '#007bff', 'call': '#17a2b8', 'message': '#28a745', 'interview': '#ffc107', 'offer': '#dc3545'}
         color = type_colors.get(obj.communication_type, '#6c757d')
-        return format_html(
-            '<span style="background-color: {}; color: white; padding: 3px 8px; '
-            'border-radius: 12px; font-size: 11px; font-weight: bold;">{}</span>',
-            color, obj.get_communication_type_display()
-        )
+        return format_html('<span style="background-color: {}; color: white; padding: 3px 8px; border-radius: 12px; font-size: 11px;">{}</span>',
+                           color, obj.get_communication_type_display())
     type_badge.short_description = 'Type'
-    
+
     def subject_preview(self, obj):
-        """Display subject preview"""
         text = obj.subject or obj.content
         preview = text[:50] + "..." if text and len(text) > 50 else (text or "No content")
         return format_html('<div style="max-width: 200px;">{}</div>', preview)
     subject_preview.short_description = 'Subject/Content'
-    
+
     def direction_badge(self, obj):
-        """Display direction badge"""
         if obj.is_outgoing:
             return format_html('<span style="background-color: #007bff; color: white; padding: 2px 6px; border-radius: 10px; font-size: 11px;">→ Outgoing</span>')
         return format_html('<span style="background-color: #28a745; color: white; padding: 2px 6px; border-radius: 10px; font-size: 11px;">← Incoming</span>')
     direction_badge.short_description = 'Direction'
-    
+
     def recruiter_link(self, obj):
-        """Display recruiter link"""
         url = reverse('admin:accounts_recruiter_change', args=[obj.recruiter.id])
-        return format_html(
-            '<a href="{}">{}</a>',
-            url, obj.recruiter.user.email
-        )
+        return format_html('<a href="{}">{}</a>', url, obj.recruiter.user.email)
     recruiter_link.short_description = 'Recruiter'
-    
+
     def application_details(self, obj):
-        """Display application details"""
         if obj.pk:
             app = obj.application
             return format_html(
-                '<div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px;">'
-                '<h4 style="margin-top: 0;">Application Details</h4>'
+                '<div style="background: #f8f9fa; padding: 15px; border-radius: 8px;">'
+                '<h4>Application Details</h4>'
                 '<p><strong>ID:</strong> #{}</p>'
                 '<p><strong>Candidate:</strong> {} {}</p>'
                 '<p><strong>Email:</strong> {}</p>'
-                '<p><strong>Job:</strong> {}</p>'
-                '</div>',
+                '<p><strong>Job:</strong> {}</p></div>',
                 app.id,
                 app.seeker.user.first_name or '',
                 app.seeker.user.last_name or '',
@@ -1177,31 +933,28 @@ class CandidateCommunicationAdmin(admin.ModelAdmin):
             )
         return ''
     application_details.short_description = ''
-    
+
     def communication_content(self, obj):
-        """Display communication content"""
         if obj.pk:
             return format_html(
-                '<div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px;">'
-                '<h4 style="margin-top: 0;">Message Content</h4>'
+                '<div style="background: #f8f9fa; padding: 15px; border-radius: 8px;">'
+                '<h4>Message Content</h4>'
                 '<div style="background: white; padding: 15px; border-radius: 5px; border: 1px solid #dee2e6; white-space: pre-wrap;">{}</div>'
                 '</div>',
                 obj.content
             )
         return ''
     communication_content.short_description = ''
-    
+
     def recruiter_details(self, obj):
-        """Display recruiter details"""
         if obj.pk:
             return format_html(
-                '<div style="background: #e8f4fd; padding: 15px; border-radius: 8px; margin-bottom: 20px;">'
-                '<h4 style="margin-top: 0;">Recruiter Details</h4>'
+                '<div style="background: #e8f4fd; padding: 15px; border-radius: 8px;">'
+                '<h4>Recruiter Details</h4>'
                 '<p><strong>Name:</strong> {} {}</p>'
                 '<p><strong>Email:</strong> {}</p>'
                 '<p><strong>Company:</strong> {}</p>'
-                '<p><strong>Designation:</strong> {}</p>'
-                '</div>',
+                '<p><strong>Designation:</strong> {}</p></div>',
                 obj.recruiter.user.first_name or '',
                 obj.recruiter.user.last_name or '',
                 obj.recruiter.user.email,
@@ -1210,10 +963,17 @@ class CandidateCommunicationAdmin(admin.ModelAdmin):
             )
         return ''
     recruiter_details.short_description = ''
-    
+
     def sent_at_display(self, obj):
-        """Format sent date"""
         if obj.pk:
             return obj.sent_at.strftime('%B %d, %Y at %I:%M %p')
         return ''
     sent_at_display.short_description = 'Sent'
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related(
+            'application__seeker__user',
+            'application__job',
+            'recruiter__user',
+            'recruiter__company'
+        )

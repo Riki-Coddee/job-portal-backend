@@ -146,7 +146,8 @@ class Job(models.Model):
     
     @property
     def is_scheduled(self):
-        return self.publish_option == 'schedule' and self.scheduled_date > timezone.now()
+        # ✅ FIX: Guard against None before comparison
+        return self.publish_option == 'schedule' and self.scheduled_date is not None and self.scheduled_date > timezone.now()
     
     class Meta:
         ordering = ['-created_at']

@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 
 from pathlib import Path
 from datetime import timedelta
+import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -67,6 +68,8 @@ INSTALLED_APPS = [
     'django_celery_beat',
     'django_celery_results',
     'debug_toolbar',
+    'contact',
+    'anymail',
 ]
 
 
@@ -341,3 +344,14 @@ LOGGING = {
         },
     },
 }
+
+# Email Configuration with SendGrid
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.sendgrid.net'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = 'apikey'  # This is literally the string "apikey" (not your email)
+EMAIL_HOST_PASSWORD = os.environ.get('SENDGRID_API_KEY')  # Your actual SendGrid API key
+DEFAULT_FROM_EMAIL = 'rikeshshrestha9821@gmail.com'
+SITE_URL = 'http://localhost:8000'  # Your local backend URL
+ADMIN_EMAIL = 'rikeshshrestha9821@gmail.com'  # Add this too

@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0; }
+        .content { padding: 20px; background: #f9f9f9; border: 1px solid #ddd; border-top: none; }
+        .message-box { background: white; padding: 15px; border-left: 4px solid #667eea; margin: 10px 0; border-radius: 5px; }
+        .footer { margin-top: 20px; padding: 10px; text-align: center; color: #777; font-size: 12px; }
+        .button { display: inline-block; padding: 10px 20px; background: #667eea; color: white; text-decoration: none; border-radius: 5px; }
+        .signature { margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h2>Thank You for Contacting Us!</h2>
+        </div>
+        
+        <div class="content">
+            <p>Dear <strong>{{ name }}</strong>,</p>
+            
+            <p>Thank you for reaching out to us. We have received your message and will get back to you within 24 hours.</p>
+            
+            <h3>Your Message Details:</h3>
+            
+            <div class="field">
+                <strong>Category:</strong> {{ category }}
+            </div>
+            
+            <div class="field">
+                <strong>Subject:</strong> {{ subject }}
+            </div>
+            
+            <div class="message-box">
+                {{ message|linebreaks }}
+            </div>
+            
+            <p>If you need immediate assistance, please call our support team at +1 (555) 123-4567.</p>
+            
+            <div class="signature">
+                <p>Best regards,<br>
+                <strong>The HireStream Team</strong></p>
+            </div>
+            
+            <div style="text-align: center; margin-top: 30px;">
+                <a href="{{ site_url }}" class="button">Visit Our Website</a>
+            </div>
+        </div>
+        
+        <div class="footer">
+            &copy; {% now "Y" %} HireStream. All rights reserved.<br>
+            This is an automated confirmation, please do not reply to this email.
+        </div>
+    </div>
+</body>
+</html>

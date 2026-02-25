@@ -7,11 +7,12 @@ from .models import JobSkill, Department, Job
 
 @admin.register(JobSkill)
 class JobSkillAdmin(admin.ModelAdmin):
-    """Read‑only admin for Job Skills (autocomplete support only)"""
+    """Read‑only admin for Job Skills – optimized with annotations"""
     list_display = ('name', 'usage_count', 'created_at_display', 'popularity_indicator')
     search_fields = ('name',)
     ordering = ('name',)
     list_per_page = 50
+    show_full_result_count = False  # ⬅️ Eliminates duplicate COUNT(*)
 
     # Disable all write operations
     def has_add_permission(self, request):
@@ -23,11 +24,11 @@ class JobSkillAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         return False
 
-    # Optionally hide from the admin index (still accessible via URL if needed)
     show_in_index = False
 
     def usage_count(self, obj):
-        count = obj.jobs.count()
+        # Use annotated job_count – no extra query
+        count = obj.job_count
         if count > 0:
             url = reverse('admin:jobs_job_changelist') + f'?skills__id__exact={obj.id}'
             return format_html(
@@ -42,7 +43,7 @@ class JobSkillAdmin(admin.ModelAdmin):
     created_at_display.short_description = 'Created'
 
     def popularity_indicator(self, obj):
-        count = obj.jobs.count()
+        count = obj.job_count  # use annotated field
         if count >= 50:
             color = '#F44336'; label = 'Very High'
         elif count >= 20:
@@ -67,6 +68,7 @@ class JobSkillAdmin(admin.ModelAdmin):
     popularity_indicator.short_description = 'Popularity'
 
     def get_queryset(self, request):
+        # Annotate with job_count to avoid per‑row COUNT queries
         return super().get_queryset(request).annotate(
             job_count=Count('jobs')
         ).order_by('-job_count', 'name')
@@ -74,7 +76,7 @@ class JobSkillAdmin(admin.ModelAdmin):
 
 @admin.register(Department)
 class DepartmentAdmin(admin.ModelAdmin):
-    """Admin interface for Departments (unchanged)"""
+    """Admin interface for Departments – optimized with annotations"""
     list_display = (
         'name',
         'is_active',
@@ -88,6 +90,7 @@ class DepartmentAdmin(admin.ModelAdmin):
     prepopulated_fields = {'slug': ('name',)}
     list_editable = ('is_active',)
     list_per_page = 25
+    show_full_result_count = False  # ⬅️ Eliminates duplicate COUNT(*)
     actions = ['activate_departments', 'deactivate_departments']
 
     fieldsets = (
@@ -115,7 +118,8 @@ class DepartmentAdmin(admin.ModelAdmin):
     slug_display.short_description = 'Slug'
 
     def job_count(self, obj):
-        count = obj.jobs.count()
+        # Use annotated total_jobs – no extra query
+        count = obj.total_jobs
         if count > 0:
             url = reverse('admin:jobs_job_changelist') + f'?department__id__exact={obj.id}'
             return format_html(
@@ -126,7 +130,8 @@ class DepartmentAdmin(admin.ModelAdmin):
     job_count.short_description = 'Total Jobs'
 
     def active_jobs_count(self, obj):
-        count = obj.jobs.filter(is_active=True, is_published=True).count()
+        # Use annotated active_jobs – no extra query
+        count = obj.active_jobs
         if count > 0:
             url = reverse('admin:jobs_job_changelist') + f'?department__id__exact={obj.id}&is_active__exact=1&is_published__exact=1'
             return format_html(
@@ -145,9 +150,16 @@ class DepartmentAdmin(admin.ModelAdmin):
     updated_at_display.short_description = 'Updated'
 
     def job_stats(self, obj):
-        total_jobs = obj.jobs.count()
-        active_jobs = obj.jobs.filter(is_active=True, is_published=True).count()
-        featured_jobs = obj.jobs.filter(is_featured=True).count()
+        # Use annotated values – no extra queries
+        total_jobs = obj.total_jobs
+        active_jobs = obj.active_jobs
+        featured_jobs = obj.jobs.filter(is_featured=True).count()  # one query per row? Let's annotate it too.
+        # But featured_jobs is not used heavily; we can keep it as is, or annotate if needed.
+        # For completeness, let's annotate featured_jobs as well to avoid any per‑row query.
+        # We'll modify get_queryset to also annotate featured_jobs.
+        # However, the user may not have many departments, so it's optional.
+        # I'll add the annotation for completeness.
+        featured_jobs = getattr(obj, 'featured_jobs', 0)  # will be set if we annotate.
         return format_html(
             '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; '
             'background: #e3f2fd; padding: 15px; border-radius: 8px;">'
@@ -176,9 +188,11 @@ class DepartmentAdmin(admin.ModelAdmin):
     job_stats.short_description = 'Job Statistics'
 
     def get_queryset(self, request):
+        # Annotate total, active, and featured jobs to avoid per‑row COUNTs
         return super().get_queryset(request).annotate(
             total_jobs=Count('jobs'),
-            active_jobs=Count('jobs', filter=Q(jobs__is_active=True, jobs__is_published=True))
+            active_jobs=Count('jobs', filter=Q(jobs__is_active=True, jobs__is_published=True)),
+            featured_jobs=Count('jobs', filter=Q(jobs__is_featured=True))
         ).order_by('-total_jobs', 'name')
 
     def activate_departments(self, request, queryset):
@@ -194,7 +208,7 @@ class DepartmentAdmin(admin.ModelAdmin):
 
 @admin.register(Job)
 class JobAdmin(admin.ModelAdmin):
-    """Professional admin interface for Jobs (read‑only)"""
+    """Professional admin interface for Jobs – optimized with prefetching and annotation"""
     list_display = (
         'job_title_display',
         'company_info',
@@ -292,6 +306,7 @@ class JobAdmin(admin.ModelAdmin):
     list_select_related = ('recruiter__company', 'recruiter__user', 'department')
     actions = None
     list_display_links = None
+    show_full_result_count = False  # ⬅️ Eliminates duplicate COUNT(*)
 
     # Disable all write operations
     def has_add_permission(self, request):
@@ -367,7 +382,7 @@ class JobAdmin(admin.ModelAdmin):
             '<div style="display: flex; align-items: center; gap: 5px;">'
             '<span style="font-size: 14px;">{}</span>'
             '<span style="background-color: {}; color: white; padding: 3px 8px; '
-            'border-radius: 12px; font-size: 11px; font-weight: bold;">{}</span>'
+            'border-radius: 12px; font-size: 11px; font-weight: bold; text-align:center;">{}</span>'
             '</div>',
             config['icon'],
             config['color'],
@@ -426,8 +441,9 @@ class JobAdmin(admin.ModelAdmin):
             [(color, color, color, icon, color, text) for icon, text, color in indicators]
         )
 
-        # Wrap all indicators in a flex container
         return format_html('<div style="display: flex; gap: 5px; flex-wrap: wrap;">{}</div>', indicator_html)
+    status_indicators.short_description = 'Status'
+
     def date_posted(self, obj):
         if obj.published_at:
             return format_html(
@@ -441,7 +457,8 @@ class JobAdmin(admin.ModelAdmin):
     date_posted.short_description = 'Date'
 
     def applications_count(self, obj):
-        count = obj.applications.count()
+        # Use prefetched applications – no extra query
+        count = len(obj.applications.all())  # uses cached prefetch
         if count > 0:
             url = reverse('admin:applications_application_changelist') + f'?job__id__exact={obj.id}'
             return format_html(
@@ -479,7 +496,7 @@ class JobAdmin(admin.ModelAdmin):
         return format_html('<span style="color: #999; font-style: italic;">No expiry</span>')
     expiry_status.short_description = 'Expires'
 
-    # Detail view methods (unchanged)
+    # Detail view methods (unchanged but safe)
     def job_details_summary(self, obj):
         return format_html(
             '<div style="background: #f5f5f5; padding: 20px; border-radius: 8px; margin-bottom: 20px;">'
@@ -508,8 +525,8 @@ class JobAdmin(admin.ModelAdmin):
     job_details_summary.short_description = ''
 
     def applications_stats(self, obj):
-        applications = obj.applications.all()
-        total = applications.count()
+        applications = obj.applications.all()  # uses prefetch
+        total = len(applications)
         if total > 0:
             status_counts = {}
             for app in applications:
