@@ -15,7 +15,14 @@ urlpatterns = [
     path('api/notifications/', include('notifications.urls')),
     path('api/contact/', include('contact.urls')),
     path('api/settings/', include('user_settings.urls')),
-] + debug_toolbar_urls()
+] 
+
+if settings.DEBUG:
+    import debug_toolbar
+    urlpatterns = [
+        path('__debug__/', include(debug_toolbar.urls)),
+    ] + urlpatterns
+
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
     urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
