@@ -7,6 +7,7 @@ python manage.py collectstatic --noinput
 
 python manage.py migrate  --settings=project.deployment_settings
 
-if [ -n "$CREATE_SUPERSTAR" ]; then 
+if [[ $CREATE_SUPERUSER ]]
+then
     python manage.py createsuperuser --no-input
 fi
