@@ -182,19 +182,19 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 ############ JAZZMIN SETTINGS #################
 JAZZMIN_SETTINGS = {
     # Title of the window
-    "site_title": "HireStream Admin",
+    "site_title": "HirePro Admin",
 
     # Title on the login screen
-    "site_header": "HireStream Portal",
+    "site_header": "HirePro Portal",
 
     # Title on the brand (top left)
-    "site_brand": "HireStream",
+    "site_brand": "HirePro",
 
     # Welcome text on the login screen
     "welcome_sign": "Welcome to the Recruitment Management System",
 
     # Copyright on the footer
-    "copyright": "HireStream Ltd",
+    "copyright": "HirePro Ltd",
 
     # Search bar model
     "search_model": ["accounts.CustomUser", "companies.Company"],
