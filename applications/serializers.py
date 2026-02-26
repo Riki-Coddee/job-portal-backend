@@ -381,6 +381,13 @@ class JobSeekerApplicationSerializer(serializers.ModelSerializer):
             return conversation.id if conversation else None
         except:
             return None
+    def get_profile_picture(self, obj):
+        if obj.seeker and obj.seeker.profile_picture:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.seeker.profile_picture.url)
+            return obj.seeker.profile_picture.url
+        return None
     
     def get_resume_file(self, obj):
         """Get resume file information from resume_snapshot"""
