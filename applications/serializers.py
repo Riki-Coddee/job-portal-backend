@@ -18,6 +18,7 @@ class ApplicationUpdateSerializer(serializers.ModelSerializer):
             'skills', 'experience_summary', 'interview_scheduled',
             'offer_made', 'offer_date', 'offer_details'
         ]
+        
     
     def validate_match_score(self, value):
         if value < 0 or value > 100:
@@ -34,6 +35,7 @@ class ApplicationSerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     last_active_display = serializers.SerializerMethodField()
     time_since_applied = serializers.SerializerMethodField()
+    candidate_profile_picture = serializers.SerializerMethodField()
 
     # Interview info
     has_interview = serializers.BooleanField(source='has_scheduled_interview', read_only=True)
@@ -64,7 +66,7 @@ class ApplicationSerializer(serializers.ModelSerializer):
             'messages_count', 'last_message_at', 'resume_file',
             'job_details', 'seeker_details', 'resume_url',
             'candidate_name', 'candidate_email', 'candidate_phone',
-            'candidate_location', 'position_applied', 'time_since_applied'
+            'candidate_location', 'position_applied', 'time_since_applied', 'candidate_profile_picture',
         ]
         read_only_fields = ['applied_at', 'last_active', 'last_message_at']
     
@@ -256,6 +258,13 @@ class ApplicationSerializer(serializers.ModelSerializer):
         if obj.seeker and obj.seeker.resume:
             return obj.seeker.resume.url
         return None
+    def get_candidate_profile_picture(self, obj):
+        if obj.seeker and obj.seeker.profile_picture:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.seeker.profile_picture.url)
+            return obj.seeker.profile_picture.url
+        return None
         
 class ApplicationNoteSerializer(serializers.ModelSerializer):
     recruiter_name = serializers.CharField(source='recruiter.user.get_full_name', read_only=True)
@@ -311,6 +320,7 @@ class JobSeekerApplicationSerializer(serializers.ModelSerializer):
     resume_file = serializers.SerializerMethodField()
     skills = serializers.JSONField(read_only=True)
     additional_info = serializers.JSONField(read_only=True)
+    profile_picture = serializers.SerializerMethodField()
     
     # Interview properties - using the Interview model
     has_interview = serializers.BooleanField(source='has_scheduled_interview', read_only=True)
@@ -326,7 +336,7 @@ class JobSeekerApplicationSerializer(serializers.ModelSerializer):
             'applied_date', 'days_since_applied', 'match_score',
             'cover_letter', 'has_interview', 'interview_details', 'interviews',
             'offer_made', 'offer_date', 'recruiter_name', 
-            'conversation_id', 'resume_file', 'skills', 'additional_info'
+            'conversation_id', 'resume_file', 'skills', 'additional_info','profile_picture',
         ]
         read_only_fields = fields
     
@@ -440,3 +450,11 @@ class ApplicationBasicSerializer(serializers.ModelSerializer):
     
     def get_candidate_name(self, obj):
         return obj.candidate_name
+    
+    def get_profile_picture(self, obj):
+        if obj.seeker and obj.seeker.profile_picture:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.seeker.profile_picture.url)
+            return obj.seeker.profile_picture.url
+        return None
